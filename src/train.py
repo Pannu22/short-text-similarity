@@ -26,9 +26,13 @@ from keras.layers import (
     Dropout,
     Embedding,
     Flatten,
+    Input,
+    concatenate,
 )
 from keras.models import Sequential
 from sklearn.model_selection import train_test_split
+from keras.preprocessing.text import Tokenizer
+from keras.preprocessing import sequence
 
 # %%
 stop_words = nltk.corpus.stopwords.words("english")
@@ -82,6 +86,88 @@ preprocess_document = np.vectorize(preprocess_document)
 data["sentence1_cleaned"] = preprocess_document(data["sentence1"])
 data["sentence2_cleaned"] = preprocess_document(data["sentence2"])
 
+token_data = pd.concat([data["sentence1_cleaned"], data["sentence2_cleaned"]])
+
+
+#%%
+max_words = 1000
+max_len = 150
+tok = Tokenizer(num_words=max_words)
+tok.fit_on_texts(token_data)
+#%%
+sentence1_sequences = tok.texts_to_sequences(data["sentence1_cleaned"])
+sentence2_sequences = tok.texts_to_sequences(data["sentence2_cleaned"])
+sentence1_matrix = sequence.pad_sequences(sentence1_sequences, maxlen=max_len)
+sentence2_matrix = sequence.pad_sequences(sentence2_sequences, maxlen=max_len)
+
+#%%
+sentence1 = Input(shape=[max_len], name="sentence1")
+sentence1_embedding = Embedding(max_words, 50, input_length=max_len)(sentence1)
+
+sentence2 = Input(shape=[max_len], name="sentence2")
+sentence2_embedding = Embedding(max_words, 50, input_length=max_len)(sentence2)
+
+concat = concatenate([sentence1_embedding, sentence2_embedding])
+
+
+hidden1 = Dense(64, activation="relu")(concat)
+batch_norm_hidden_1 = BatchNormalization()(hidden1)
+hidden2 = Dense(64, activation="relu")(hidden1)
+flatten = Flatten()(hidden2)
+output = Dense(1, name="output", activation="sigmoid")(flatten)
+
+#%%
+model = keras.Model(inputs=[sentence1, sentence2], output=[output])
+#%%
+model.summary()
+#%%
+# Creating an ADAM optimizer
+adam = optimizers.Adam(learning_rate=0.01, beta_1=0.9, beta_2=0.999)
+
+
+# %%
+# compiling model
+model.compile(
+    optimizer=adam,
+    loss="binary_crossentropy",
+    metrics=[metrics.Precision(), metrics.Recall()],
+)
+
+#%%
+model.fit(
+    x=[sentence1_matrix, sentence2_matrix],
+    y=y.values,
+    batch_size=64,
+    epochs=100,
+    verbose=1,
+    validation_split=0.25,
+)
+
+#%%
+test_data = pd.read_csv("../input/test.csv")
+test_data.head()
+#%%
+test_data["sentence1_cleaned"] = preprocess_document(test_data["sentence1"])
+test_data["sentence2_cleaned"] = preprocess_document(test_data["sentence2"])
+
+#%%
+test_sentence1_sequences = tok.texts_to_sequences(test_data["sentence1_cleaned"])
+test_sentence2_sequences = tok.texts_to_sequences(test_data["sentence2_cleaned"])
+test_sentence1_matrix = sequence.pad_sequences(test_sentence1_sequences, maxlen=max_len)
+test_sentence2_matrix = sequence.pad_sequences(test_sentence2_sequences, maxlen=max_len)
+#%%
+test_data["label"] = model.predict(x=[test_sentence1_matrix, test_sentence2_matrix])
+
+#%%
+test_data["label"] = test_data["label"] >= 0.5
+
+
+#%%
+test_data["label"] = test_data["label"] * 1
+
+#%%
+test_data.head()
+test_data[["pid", "label"]].to_csv("../output/submission_1.csv", index=False)
 #%%
 # data[["sentence1_cleaned", "sentence2_cleaned", "label"]].to_csv(
 #     "../output/sample_training_data.csv", index=True
@@ -177,62 +263,38 @@ for i in range(data.shape[0]):
     )
 # %%
 data.head()
-
 # %%
 X = data[["sentence1_vector", "sentence2_vector"]]
-y = data["label"]
+y = data["label"].values
+merged_array = np.stack(
+    [data["sentence1_vector"].values, data["sentence2_vector"].values], axis=1
+)
+
 # %%
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=3)
+X_train, X_test, y_train, y_test = train_test_split(
+    merged_array, y, test_size=0.2, random_state=3
+)
 #%%
 INPUT_LAYER = X_train.shape[1]
 
 #%%
 # Instantiate keras sequential model
-model = Sequential()
-
-#%%
-# Adding Input layer with Batch Normalization and Dropout
-model.add(Embedding(input_dim=INPUT_LAYER, output_dim=200, input_length=300,))
-model.add(BatchNormalization())
-model.add(Dropout(rate=0.1))
-model.add(Flatten())
-
-#%%
-# Adding First layer with Batch Normalization and Dropout
-
-model.add(Dense(activation="relu", units=32, kernel_initializer="uniform"))
-
-model.add(BatchNormalization())
-model.add(Dropout(rate=0.1))
-
-#%%
-# Adding second hidden layer with Batch Normalization and Dropout
-model.add(Dense(activation="relu", units=16, kernel_initializer="uniform"))
-
-model.add(BatchNormalization())
-model.add(Dropout(rate=0.1))
-
-#%%
-# Adding the final output layer with Sigmoid
-model.add(Dense(1, activation="sigmoid", kernel_initializer="uniform"))
-
-#%%
-model.summary()
-#%%
-# Creating an ADAM optimizer
-adam = optimizers.Adam(learning_rate=0.01, beta_1=0.9, beta_2=0.999)
-
 
 # %%
-# compiling model
-model.compile(
-    optimizer=adam,
-    loss="binary_crossentropy",
-    metrics=[metrics.Precision(), metrics.Recall()],
-)
-# %%
+sentence1_vector = X["sentence1_vector"]
+sentence2_vector = X["sentence2_vector"]
+y = data["label"]
+
+#%%
 # fitting the model on training set
-model.fit(x=X_train, y=y_train, batch_size=32, epochs=10, verbose=1)
+model.fit(
+    x=[sentence1_vector.values, sentence2_vector.values],
+    y=y.values,
+    batch_size=32,
+    epochs=10,
+    verbose=1,
+    validation_split=0.25,
+)
 
 # %%
 # evaluating on unknown data
