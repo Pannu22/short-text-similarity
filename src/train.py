@@ -1,4 +1,11 @@
 #%%
+import itertools
+
+# %%
+from collections import Counter
+
+# %%
+import keras
 import nltk
 import numpy as np
 import pandas as pd
@@ -7,6 +14,21 @@ import seaborn as sns
 # %%
 from gensim.models import KeyedVectors, Word2Vec
 from gensim.scripts.glove2word2vec import glove2word2vec
+
+#%%
+from keras import metrics, optimizers
+from keras.callbacks import EarlyStopping, ModelCheckpoint
+from keras.layers import (
+    Activation,
+    Add,
+    BatchNormalization,
+    Dense,
+    Dropout,
+    Embedding,
+    Flatten,
+)
+from keras.models import Sequential
+from sklearn.model_selection import train_test_split
 
 # %%
 stop_words = nltk.corpus.stopwords.words("english")
@@ -66,52 +88,47 @@ data["sentence2_cleaned"] = preprocess_document(data["sentence2"])
 # )
 
 
-# %%
-glove_input_file = "../model/glove.twitter.27B/glove.twitter.27B.25d.txt"
-word2vec_output_file = "../model/word2vec.txt"
-glove2word2vec(glove_input_file, word2vec_output_file)
+# # %%
+# glove_input_file = "../model/glove.twitter.27B/glove.twitter.27B.25d.txt"
+# word2vec_output_file = "../model/word2vec.txt"
+# glove2word2vec(glove_input_file, word2vec_output_file)
 
-model = KeyedVectors.load_word2vec_format(word2vec_output_file, binary=False)
-
-
-#%%
-# Check if word2vec is loaded or not
-print(
-    model.most_similar(positive=["australia"], topn=10)
-)  # [('spain', 0.8764086365699768), ('london', 0.8526231646537781), ('uk', 0.8515673875808716), ('germany', 0.8489168882369995), ('canada', 0.8392830491065979), ('denmark', 0.8238717317581177), ('singapore', 0.8228336572647095), ('vietnam', 0.8192894458770752), ('europe', 0.8162673711776733), ('asia', 0.8147203922271729)]
-print(model.similarity("woman", "man"))  # 0.70595723
-
-# %%
-data.head()
-
-# %%
-data["sentence1_cleaned"][0]
-
-# %%
-def calcWmDistance(sentence1, sentence2):
-    wmdistance = model.wmdistance(sentence1, sentence2)
-    return wmdistance
+# model = KeyedVectors.load_word2vec_format(word2vec_output_file, binary=False)
 
 
-vect_calcWmDistance = np.vectorize(calcWmDistance)
+# #%%
+# # Check if word2vec is loaded or not
+# print(
+#     model.most_similar(positive=["australia"], topn=10)
+# )  # [('spain', 0.8764086365699768), ('london', 0.8526231646537781), ('uk', 0.8515673875808716), ('germany', 0.8489168882369995), ('canada', 0.8392830491065979), ('denmark', 0.8238717317581177), ('singapore', 0.8228336572647095), ('vietnam', 0.8192894458770752), ('europe', 0.8162673711776733), ('asia', 0.8147203922271729)]
+# print(model.similarity("woman", "man"))  # 0.70595723
+
+# # %%
+# data.head()
+
+# # %%
+# data["sentence1_cleaned"][0]
+
+# # %%
+# def calcWmDistance(sentence1, sentence2):
+#     wmdistance = model.wmdistance(sentence1, sentence2)
+#     return wmdistance
 
 
-# %%
-data["wmdistance"] = vect_calcWmDistance(data["sentence1"], data["sentence2"])
-# %%
-data.head()
+# vect_calcWmDistance = np.vectorize(calcWmDistance)
 
-# %%
-sns.scatterplot(x="label", y="wmdistance", data=data)
+
+# # %%
+# data["wmdistance"] = vect_calcWmDistance(data["sentence1"], data["sentence2"])
+# # %%
+# data.head()
+
+# # %%
+# sns.scatterplot(x="label", y="wmdistance", data=data)
 
 
 # %%
 word_emb_model = KeyedVectors.load_word2vec_format("../model/wiki-news-300d-1M.vec")
-
-
-# %%
-from collections import Counter
-import itertools
 
 
 def map_word_frequency(document):
@@ -149,4 +166,74 @@ sif = get_sif_feature_vectors(
 
 
 # %%
-data["sentence1_vector"], data["sentence2_vector"] = np.vectorize
+data["sentence1_vector"] = ""
+data["sentence2_vector"] = ""
+
+
+# %%
+for i in range(data.shape[0]):
+    data["sentence1_vector"][i], data["sentence2_vector"][i] = get_sif_feature_vectors(
+        data["sentence1_cleaned"][i], data["sentence2_cleaned"][i]
+    )
+# %%
+data.head()
+
+# %%
+X = data[["sentence1_vector", "sentence2_vector"]]
+y = data["label"]
+# %%
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=3)
+#%%
+INPUT_LAYER = X_train.shape[1]
+
+#%%
+# Instantiate keras sequential model
+model = Sequential()
+
+#%%
+# Adding Input layer with Batch Normalization and Dropout
+model.add(Embedding(input_dim=INPUT_LAYER, output_dim=200, input_length=300,))
+model.add(BatchNormalization())
+model.add(Dropout(rate=0.1))
+model.add(Flatten())
+
+#%%
+# Adding First layer with Batch Normalization and Dropout
+
+model.add(Dense(activation="relu", units=32, kernel_initializer="uniform"))
+
+model.add(BatchNormalization())
+model.add(Dropout(rate=0.1))
+
+#%%
+# Adding second hidden layer with Batch Normalization and Dropout
+model.add(Dense(activation="relu", units=16, kernel_initializer="uniform"))
+
+model.add(BatchNormalization())
+model.add(Dropout(rate=0.1))
+
+#%%
+# Adding the final output layer with Sigmoid
+model.add(Dense(1, activation="sigmoid", kernel_initializer="uniform"))
+
+#%%
+model.summary()
+#%%
+# Creating an ADAM optimizer
+adam = optimizers.Adam(learning_rate=0.01, beta_1=0.9, beta_2=0.999)
+
+
+# %%
+# compiling model
+model.compile(
+    optimizer=adam,
+    loss="binary_crossentropy",
+    metrics=[metrics.Precision(), metrics.Recall()],
+)
+# %%
+# fitting the model on training set
+model.fit(x=X_train, y=y_train, batch_size=32, epochs=10, verbose=1)
+
+# %%
+# evaluating on unknown data
+score = model.evaluate(x=X_test, y=y_test)
